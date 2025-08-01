@@ -64,13 +64,15 @@
 
                 <div class="form-group">
                     <label for="image">画像アップロード:</label>
+                    <small style="color: #e74c3c; margin-bottom: 5px; display: block;">※ 画像は300x300px以下に自動圧縮されます</small>
                     <small id="imageHelp" style="display: none; color: #666; margin-bottom: 5px;">※
                         画像を変更する場合のみ選択してください。選択しない場合は既存の画像が保持されます。</small>
                     <input type="file" id="image" accept="image/*">
                     <div id="dropZone" class="drop-zone">
-                        <p>ここに画像をドラッグ&ドロップ<br>または<br>Ctrl+V でペースト</p>
+                        <p>ここに画像をドラッグ&ドロップ<br>または<br>Ctrl+V でペースト<br><small>（自動で小さく圧縮されます）</small></p>
                     </div>
                     <div id="imagePreview"></div>
+                    <button type="button" id="clearImage" class="clear-btn" style="display: none;">画像をクリア</button>
                 </div>
 
                 <button type="submit" class="submit-btn">登録</button>
@@ -127,11 +129,24 @@
                 
                 // コピー&ペースト機能
                 this.setupPasteFunction();
+                
+                // 画像クリアボタン
+                document.getElementById('clearImage').addEventListener('click', () => {
+                    this.clearImage();
+                });
             }
 
             setCurrentDate() {
-                const today = new Date().toISOString().split('T')[0];
+                const today = this.getCurrentDateString();
                 document.getElementById('date').value = today;
+            }
+
+            getCurrentDateString() {
+                const now = new Date();
+                const year = now.getFullYear();
+                const month = String(now.getMonth() + 1).padStart(2, '0');
+                const day = String(now.getDate()).padStart(2, '0');
+                return `${year}-${month}-${day}`;
             }
 
             async handleSubmit() {
@@ -202,21 +217,15 @@
                     category: document.getElementById('category').value,
                     imageData: imageData,
                     imageName: imageName,
-                    createdAt: new Date().toISOString()
+                    createdAt: this.getCurrentDateString()
                 };
             }
 
             fileToBase64(file) {
                 return new Promise((resolve, reject) => {
-                    // ファイルサイズが1MBを超える場合は圧縮
-                    if (file.size > 1024 * 1024) {
-                        this.compressImage(file).then(resolve).catch(reject);
-                    } else {
-                        const reader = new FileReader();
-                        reader.onload = () => resolve(reader.result);
-                        reader.onerror = reject;
-                        reader.readAsDataURL(file);
-                    }
+                    // すべての画像を圧縮（URL制限対応）
+                    console.log(`元画像サイズ: ${Math.round(file.size / 1024)}KB`);
+                    this.compressImage(file).then(resolve).catch(reject);
                 });
             }
 
@@ -227,9 +236,9 @@
                     const img = new Image();
                     
                     img.onload = () => {
-                        // 最大サイズを800x600に制限
-                        const maxWidth = 800;
-                        const maxHeight = 600;
+                        // 非常に小さなサイズに制限（URL制限対応）
+                        const maxWidth = 300;
+                        const maxHeight = 300;
                         let { width, height } = img;
                         
                         // アスペクト比を保持してリサイズ
@@ -251,9 +260,24 @@
                         // 画像を描画
                         ctx.drawImage(img, 0, 0, width, height);
                         
-                        // 圧縮してBase64に変換（品質0.7）
-                        const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.7);
-                        console.log(`画像を圧縮しました: ${file.size} bytes → ${Math.round(compressedDataUrl.length * 0.75)} bytes`);
+                        // 段階的に品質を下げて圧縮
+                        let quality = 0.3;
+                        let compressedDataUrl;
+                        let attempts = 0;
+                        
+                        do {
+                            compressedDataUrl = canvas.toDataURL('image/jpeg', quality);
+                            console.log(`圧縮試行 ${attempts + 1}: 品質${quality}, サイズ${Math.round(compressedDataUrl.length / 1024)}KB`);
+                            
+                            if (compressedDataUrl.length < 15000) { // 約11KBのBase64データ
+                                break;
+                            }
+                            
+                            quality -= 0.05;
+                            attempts++;
+                        } while (quality > 0.1 && attempts < 5);
+                        
+                        console.log(`画像を圧縮しました: ${file.size} bytes → ${Math.round(compressedDataUrl.length * 0.75)} bytes (品質: ${quality})`);
                         resolve(compressedDataUrl);
                     };
                     
@@ -292,10 +316,12 @@
                     
                     const fullUrl = url + '?' + queryString;
                     
-                    // URLが長すぎる場合はエラー
-                    if (fullUrl.length > 8000) {
+                    console.log(`リクエストURL長: ${fullUrl.length} 文字`);
+                    
+                    // URLが長すぎる場合はエラー（より厳しい制限）
+                    if (fullUrl.length > 6000) {
                         console.error('URL too long:', fullUrl.length, 'characters');
-                        reject(new Error('Request too large - please use smaller image'));
+                        reject(new Error('Request too large - image data exceeds URL limit'));
                         return;
                     }
 
@@ -463,11 +489,17 @@
                             this.requests = response.data || [];
                             // 日付フォーマットを修正
                             this.requests = this.requests.map(req => {
-                                if (req.date && req.date.includes('/')) {
+                                if (req.date) {
+                                    // ISO形式の場合は日付部分のみ抽出
+                                    if (req.date.includes('T')) {
+                                        req.date = req.date.split('T')[0];
+                                    }
                                     // MM/DD/YYYY形式をYYYY-MM-DD形式に変換
-                                    const dateParts = req.date.split('/');
-                                    if (dateParts.length === 3) {
-                                        req.date = `${dateParts[2]}-${dateParts[0].padStart(2, '0')}-${dateParts[1].padStart(2, '0')}`;
+                                    else if (req.date.includes('/')) {
+                                        const dateParts = req.date.split('/');
+                                        if (dateParts.length === 3) {
+                                            req.date = `${dateParts[2]}-${dateParts[0].padStart(2, '0')}-${dateParts[1].padStart(2, '0')}`;
+                                        }
                                     }
                                 }
                                 return req;
@@ -517,14 +549,31 @@
 
                 document.getElementById('imageHelp').style.display = 'block';
                 const dropZone = document.getElementById('dropZone');
+                const clearBtn = document.getElementById('clearImage');
 
+                // 画像表示の改善（Google Drive対応）
                 if (request.imageData) {
+                    // 従来のBase64データ
                     const preview = document.getElementById('imagePreview');
                     preview.innerHTML = `<img src="${request.imageData}" alt="現在の画像"><p style="margin-top: 5px; color: #666; font-size: 0.9em;">現在の画像: ${request.imageName || '画像ファイル'}</p>`;
                     dropZone.style.display = 'none';
+                    clearBtn.style.display = 'inline-block';
+                } else if (request.thumbnailUrl && request.imageUrl) {
+                    // Google Drive画像
+                    const preview = document.getElementById('imagePreview');
+                    preview.innerHTML = `<img src="${request.thumbnailUrl}" alt="現在の画像"><p style="margin-top: 5px; color: #666; font-size: 0.9em;">現在の画像: ${request.imageName || '画像ファイル'} <a href="${request.imageUrl}" target="_blank">(Google Driveで開く)</a></p>`;
+                    dropZone.style.display = 'none';
+                    clearBtn.style.display = 'inline-block';
+                } else if (request.imageUrl) {
+                    // Google DriveのURL（サムネイルなし）
+                    const preview = document.getElementById('imagePreview');
+                    preview.innerHTML = `<p style="margin-top: 5px; color: #666; font-size: 0.9em;">📷 <a href="${request.imageUrl}" target="_blank">Google Driveの画像を見る</a></p>`;
+                    dropZone.style.display = 'none';
+                    clearBtn.style.display = 'inline-block';
                 } else {
                     document.getElementById('imagePreview').innerHTML = '';
                     dropZone.style.display = 'block';
+                    clearBtn.style.display = 'none';
                 }
             }
 
@@ -547,18 +596,28 @@
             displayImagePreview(file) {
                 const preview = document.getElementById('imagePreview');
                 const dropZone = document.getElementById('dropZone');
+                const clearBtn = document.getElementById('clearImage');
 
                 if (file) {
                     const reader = new FileReader();
                     reader.onload = (e) => {
-                        preview.innerHTML = `<img src="${e.target.result}" alt="プレビュー"><p style="margin-top: 5px; color: #666; font-size: 0.9em;">選択された画像: ${file.name}</p>`;
+                        preview.innerHTML = `<img src="${e.target.result}" alt="プレビュー"><p style="margin-top: 5px; color: #666; font-size: 0.9em;">選択された画像: ${file.name} (${Math.round(file.size / 1024)}KB)</p>`;
                         dropZone.style.display = 'none';
+                        clearBtn.style.display = 'inline-block';
                     };
                     reader.readAsDataURL(file);
                 } else {
                     preview.innerHTML = '';
                     dropZone.style.display = 'block';
+                    clearBtn.style.display = 'none';
                 }
+            }
+
+            clearImage() {
+                document.getElementById('image').value = '';
+                document.getElementById('imagePreview').innerHTML = '';
+                document.getElementById('dropZone').style.display = 'block';
+                document.getElementById('clearImage').style.display = 'none';
             }
 
             setupDragAndDrop() {
@@ -692,15 +751,30 @@
                     '低': 'priority-low'
                 }[request.priority] || '';
 
-                const imageCell = request.imageData
-                    ? `<img src="${request.imageData}" alt="添付画像" class="image-thumbnail" onclick="window.open('${request.imageData}', '_blank')">`
-                    : '画像なし';
+                // 画像表示の改善（Google Drive対応）
+                let imageCell = '画像なし';
+                if (request.imageData) {
+                    // 従来のBase64データ
+                    imageCell = `<img src="${request.imageData}" alt="添付画像" class="image-thumbnail" onclick="window.open('${request.imageData}', '_blank')">`;
+                } else if (request.thumbnailUrl && request.imageUrl) {
+                    // Google Drive画像
+                    imageCell = `<img src="${request.thumbnailUrl}" alt="添付画像" class="image-thumbnail" onclick="window.open('${request.imageUrl}', '_blank')" title="クリックでGoogle Driveで開く">`;
+                } else if (request.imageUrl) {
+                    // Google DriveのURL（サムネイルなし）
+                    imageCell = `<a href="${request.imageUrl}" target="_blank" class="drive-link">📷 画像を見る</a>`;
+                }
 
                 // 日付を正しい形式で表示
                 let displayDate = request.date || '';
-                if (displayDate && displayDate.includes('-')) {
+                if (displayDate) {
                     // YYYY-MM-DD形式をYYYY/MM/DD形式に変換
-                    displayDate = displayDate.replace(/-/g, '/');
+                    if (displayDate.includes('-')) {
+                        displayDate = displayDate.replace(/-/g, '/');
+                    }
+                    // ISO形式の場合は日付部分のみ抽出
+                    if (displayDate.includes('T')) {
+                        displayDate = displayDate.split('T')[0].replace(/-/g, '/');
+                    }
                 }
 
                 return `
