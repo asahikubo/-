@@ -1,476 +1,130 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>修正依頼管理システム</title>
-    <link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>修正依頼管理システム</title>
+  <style>
+    body { font-family: sans-serif; margin: 2em; }
+    table { border-collapse: collapse; width: 100%; margin-top: 1em; }
+    th, td { border: 1px solid #ccc; padding: 0.5em; }
+    th { background: #f0f0f0; }
+    .image-preview { max-width: 100px; }
+  </style>
 </head>
 <body>
-    <div class="container">
-        <header>
-            <h1>修正依頼管理システム</h1>
-            <p class="version">スプレッドシート版 - 複数人で共有可能</p>
-        </header>
 
-        <!-- 入力フォーム -->
-        <div class="form-section">
-            <h2>新規修正依頼</h2>
-            <form id="requestForm">
-                <div class="form-group">
-                    <label for="page">修正ページ:</label>
-                    <select id="page" required>
-                        <option value="">選択してください</option>
-                        <option value="トップページ">トップページ</option>
-                        <option value="商品一覧">商品一覧</option>
-                        <option value="商品詳細">商品詳細</option>
-                        <option value="お問い合わせ">お問い合わせ</option>
-                        <option value="会社概要">会社概要</option>
-                    </select>
-                </div>
+<h1>修正依頼登録</h1>
+<form id="form">
+  <label>ページ: <input type="text" id="page" required></label><br>
+  <label>記入日: <input type="date" id="date" required></label><br>
+  <label>内容: <textarea id="content" required></textarea></label><br>
+  <label>優先度:
+    <select id="priority" required>
+      <option value="高">高</option>
+      <option value="中">中</option>
+      <option value="低">低</option>
+    </select>
+  </label><br>
+  <label>カテゴリ:
+    <select id="category" required>
+      <option value="修正">修正</option>
+      <option value="追加">追加</option>
+      <option value="削除">削除</option>
+      <option value="変更">変更</option>
+    </select>
+  </label><br>
+  <label>画像: <input type="file" id="image" accept="image/*"></label><br>
+  <div id="preview"></div><br>
+  <button type="submit">登録</button>
+</form>
 
-                <div class="form-group">
-                    <label for="date">記入日:</label>
-                    <input type="date" id="date" required>
-                </div>
+<h2>修正依頼一覧</h2>
+<div id="list">読み込み中...</div>
 
-                <div class="form-group">
-                    <label for="content">修正内容:</label>
-                    <textarea id="content" rows="4" required placeholder="修正内容を詳しく記入してください"></textarea>
-                </div>
+<script>
+const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxX7Q9XPiW9jWeLxylRLAEGzT9iMIFERTvqeCrraDLS7i9cCqeMJ2qDkFDWqZfpHCaz/exec';
 
-                <div class="form-group">
-                    <label for="priority">優先度:</label>
-                    <select id="priority" required>
-                        <option value="">選択してください</option>
-                        <option value="高">高</option>
-                        <option value="中">中</option>
-                        <option value="低">低</option>
-                    </select>
-                </div>
+document.addEventListener('DOMContentLoaded', () => {
+  loadData();
 
-                <div class="form-group">
-                    <label for="category">修正カテゴリ:</label>
-                    <select id="category" required>
-                        <option value="">選択してください</option>
-                        <option value="修正">修正</option>
-                        <option value="追加">追加</option>
-                        <option value="削除">削除</option>
-                        <option value="変更">変更</option>
-                    </select>
-                </div>
+  const form = document.getElementById('form');
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const formData = await getFormData();
+    await fetch(SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        action: 'add',
+        data: JSON.stringify(formData)
+      })
+    });
+    form.reset();
+    document.getElementById('preview').innerHTML = '';
+    loadData();
+  });
 
-                <div class="form-group">
-                    <label for="image">画像アップロード:</label>
-                    <small id="imageHelp" style="display: none; color: #666; margin-bottom: 5px;">※ 画像を変更する場合のみ選択してください。選択しない場合は既存の画像が保持されます。</small>
-                    <input type="file" id="image" accept="image/*">
-                    <div id="imagePreview"></div>
-                </div>
+  document.getElementById('image').addEventListener('change', handlePreview);
+});
 
-                <button type="submit" class="submit-btn">登録</button>
-                <div id="loading" class="loading" style="display: none;">保存中...</div>
-            </form>
-        </div>
+function handlePreview(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function (event) {
+    document.getElementById('preview').innerHTML = `<img src="${event.target.result}" class="image-preview">`;
+  };
+  reader.readAsDataURL(file);
+}
 
-        <!-- タブ表示エリア -->
-        <div class="tabs-section">
-            <h2>修正依頼一覧</h2>
-            <div class="tabs" id="pageTabs"></div>
-            <div class="tab-content" id="tabContent"></div>
-        </div>
-    </div>
+async function getFormData() {
+  const imageFile = document.getElementById('image').files[0];
+  const imageData = imageFile ? await toBase64(imageFile) : '';
+  const imageName = imageFile ? imageFile.name : '';
 
-    <script>
-        // Google Apps Script Web App URL（後で設定）
-        const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxX7Q9XPiW9jWeLxylRLAEGzT9iMIFERTvqeCrraDLS7i9cCqeMJ2qDkFDWqZfpHCaz/exec';
-        
-        // データ管理クラス
-        class RequestManager {
-            constructor() {
-                this.requests = [];
-                this.currentEditId = null;
-                this.init();
-            }
+  return {
+    id: Date.now().toString(),
+    page: document.getElementById('page').value,
+    date: document.getElementById('date').value,
+    content: document.getElementById('content').value,
+    priority: document.getElementById('priority').value,
+    category: document.getElementById('category').value,
+    imageData,
+    imageName,
+    createdAt: new Date().toISOString()
+  };
+}
 
-            async init() {
-                this.setupEventListeners();
-                this.setCurrentDate();
-                await this.loadRequests();
-                this.renderTabs();
-                this.renderRequests();
-            }
+function toBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
 
-            setupEventListeners() {
-                const form = document.getElementById('requestForm');
-                if (form) {
-                    form.addEventListener('submit', (e) => {
-                        e.preventDefault();
-                        this.handleSubmit();
-                    });
-                }
+async function loadData() {
+  try {
+    const res = await fetch(`${SCRIPT_URL}?action=get`);
+    const json = await res.json();
+    if (!json || !json.data) throw new Error('No data');
+    const html = json.data.map(r => `
+      <div style="margin-bottom:1em;border:1px solid #ccc;padding:0.5em;">
+        <strong>${r.page}</strong> / ${r.date}<br>
+        <em>${r.content}</em><br>
+        優先度: ${r.priority} / カテゴリ: ${r.category}<br>
+        ${r.imageData ? `<img src="${r.imageData}" class="image-preview">` : ''}
+      </div>
+    `).join('');
+    document.getElementById('list').innerHTML = html || 'データなし';
+  } catch (err) {
+    console.error(err);
+    document.getElementById('list').textContent = '読み込み失敗';
+  }
+}
+</script>
 
-                const imageInput = document.getElementById('image');
-                if (imageInput) {
-                    imageInput.addEventListener('change', (e) => {
-                        this.handleImagePreview(e);
-                    });
-                }
-            }
-
-            setCurrentDate() {
-                const today = new Date().toISOString().split('T')[0];
-                document.getElementById('date').value = today;
-            }
-
-            async handleSubmit() {
-                const loading = document.getElementById('loading');
-                loading.style.display = 'block';
-
-                try {
-                    const formData = await this.getFormData();
-                    
-                    if (this.currentEditId) {
-                        await this.updateRequest(this.currentEditId, formData);
-                        this.currentEditId = null;
-                    } else {
-                        await this.addRequest(formData);
-                    }
-                    
-                    this.resetForm();
-                    await this.loadRequests();
-                    this.renderTabs();
-                    this.renderRequests();
-                } catch (error) {
-                    console.error('保存エラー:', error);
-                    alert('保存に失敗しました。もう一度お試しください。');
-                } finally {
-                    loading.style.display = 'none';
-                }
-            }
-
-            async getFormData() {
-                const imageFile = document.getElementById('image').files[0];
-                let imageData = null;
-                let imageName = null;
-
-                if (imageFile) {
-                    imageData = await this.fileToBase64(imageFile);
-                    imageName = imageFile.name;
-                } else if (this.currentEditId) {
-                    const existingRequest = this.requests.find(req => req.id === this.currentEditId);
-                    if (existingRequest) {
-                        imageData = existingRequest.imageData;
-                        imageName = existingRequest.imageName;
-                    }
-                }
-
-                return {
-                    id: this.currentEditId || Date.now().toString(),
-                    page: document.getElementById('page').value,
-                    date: document.getElementById('date').value,
-                    content: document.getElementById('content').value,
-                    priority: document.getElementById('priority').value,
-                    category: document.getElementById('category').value,
-                    imageData: imageData,
-                    imageName: imageName,
-                    createdAt: new Date().toISOString()
-                };
-            }
-
-            fileToBase64(file) {
-                return new Promise((resolve, reject) => {
-                    const reader = new FileReader();
-                    reader.onload = () => resolve(reader.result);
-                    reader.onerror = reject;
-                    reader.readAsDataURL(file);
-                });
-            }
-
-            async addRequest(requestData) {
-                try {
-                    const formData = new FormData();
-                    formData.append('action', 'add');
-                    formData.append('data', JSON.stringify(requestData));
-                    
-                    const response = await fetch(SCRIPT_URL, {
-                        method: 'POST',
-                        body: formData
-                    });
-                    
-                    if (!response.ok) {
-                        throw new Error('Network response was not ok');
-                    }
-                    
-                    const result = await response.json();
-                    if (result.status !== 'success') {
-                        throw new Error(result.message || 'Unknown error');
-                    }
-                } catch (error) {
-                    console.error('Add request error:', error);
-                    // フォールバック: ローカルストレージに保存
-                    this.requests.push(requestData);
-                    this.saveToLocalStorage();
-                }
-            }
-
-            async updateRequest(id, requestData) {
-                try {
-                    const formData = new FormData();
-                    formData.append('action', 'update');
-                    formData.append('id', id);
-                    formData.append('data', JSON.stringify(requestData));
-                    
-                    const response = await fetch(SCRIPT_URL, {
-                        method: 'POST',
-                        body: formData
-                    });
-                    
-                    if (!response.ok) {
-                        throw new Error('Network response was not ok');
-                    }
-                    
-                    const result = await response.json();
-                    if (result.status !== 'success') {
-                        throw new Error(result.message || 'Unknown error');
-                    }
-                } catch (error) {
-                    console.error('Update request error:', error);
-                    // フォールバック: ローカルストレージで更新
-                    const index = this.requests.findIndex(req => req.id === id);
-                    if (index !== -1) {
-                        this.requests[index] = { ...this.requests[index], ...requestData };
-                        this.saveToLocalStorage();
-                    }
-                }
-            }
-
-            async deleteRequest(id) {
-                if (confirm('この修正依頼を削除しますか？')) {
-                    try {
-                        const formData = new FormData();
-                        formData.append('action', 'delete');
-                        formData.append('id', id);
-                        
-                        const response = await fetch(SCRIPT_URL, {
-                            method: 'POST',
-                            body: formData
-                        });
-                        
-                        if (!response.ok) {
-                            throw new Error('Network response was not ok');
-                        }
-                        
-                        const result = await response.json();
-                        if (result.status !== 'success') {
-                            throw new Error(result.message || 'Unknown error');
-                        }
-                        
-                        await this.loadRequests();
-                        this.renderTabs();
-                        this.renderRequests();
-                    } catch (error) {
-                        console.error('Delete request error:', error);
-                        // フォールバック: ローカルストレージから削除
-                        this.requests = this.requests.filter(req => req.id !== id);
-                        this.saveToLocalStorage();
-                        this.renderTabs();
-                        this.renderRequests();
-                    }
-                }
-            }
-
-            async loadRequests() {
-                try {
-                    const response = await fetch(SCRIPT_URL + '?action=get');
-                    
-                    if (!response.ok) {
-                        throw new Error('Network response was not ok');
-                    }
-                    
-                    const result = await response.json();
-                    if (result.status === 'success') {
-                        this.requests = result.data || [];
-                    } else {
-                        throw new Error(result.message || 'Unknown error');
-                    }
-                } catch (error) {
-                    console.error('Load requests error:', error);
-                    // フォールバック: ローカルストレージから読み込み
-                    this.requests = this.loadFromLocalStorage();
-                }
-            }
-
-            editRequest(id) {
-                const request = this.requests.find(req => req.id === id);
-                if (request) {
-                    this.currentEditId = id;
-                    this.fillForm(request);
-                    document.querySelector('.form-section h2').textContent = '修正依頼を編集';
-                    document.querySelector('.submit-btn').textContent = '更新';
-                }
-            }
-
-            fillForm(request) {
-                document.getElementById('page').value = request.page;
-                document.getElementById('date').value = request.date;
-                document.getElementById('content').value = request.content;
-                document.getElementById('priority').value = request.priority;
-                document.getElementById('category').value = request.category;
-                
-                document.getElementById('imageHelp').style.display = 'block';
-                
-                if (request.imageData) {
-                    const preview = document.getElementById('imagePreview');
-                    preview.innerHTML = `<img src="${request.imageData}" alt="現在の画像"><p style="margin-top: 5px; color: #666; font-size: 0.9em;">現在の画像</p>`;
-                }
-            }
-
-            resetForm() {
-                document.getElementById('requestForm').reset();
-                document.getElementById('imagePreview').innerHTML = '';
-                document.getElementById('imageHelp').style.display = 'none';
-                this.setCurrentDate();
-                this.currentEditId = null;
-                document.querySelector('.form-section h2').textContent = '新規修正依頼';
-                document.querySelector('.submit-btn').textContent = '登録';
-            }
-
-            handleImagePreview(event) {
-                const file = event.target.files[0];
-                const preview = document.getElementById('imagePreview');
-                
-                if (file) {
-                    const reader = new FileReader();
-                    reader.onload = (e) => {
-                        preview.innerHTML = `<img src="${e.target.result}" alt="プレビュー">`;
-                    };
-                    reader.readAsDataURL(file);
-                } else {
-                    preview.innerHTML = '';
-                }
-            }
-
-            renderTabs() {
-                const pages = [...new Set(this.requests.map(req => req.page))];
-                const tabsContainer = document.getElementById('pageTabs');
-                
-                if (pages.length === 0) {
-                    tabsContainer.innerHTML = '<div class="no-data">まだ修正依頼がありません</div>';
-                    return;
-                }
-
-                tabsContainer.innerHTML = pages.map(page => 
-                    `<div class="tab" data-page="${page}">${page}</div>`
-                ).join('');
-
-                document.querySelectorAll('.tab').forEach(tab => {
-                    tab.addEventListener('click', (e) => {
-                        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-                        e.target.classList.add('active');
-                        this.renderRequests(e.target.dataset.page);
-                    });
-                });
-
-                if (pages.length > 0) {
-                    document.querySelector('.tab').classList.add('active');
-                    this.renderRequests(pages[0]);
-                }
-            }
-
-            renderRequests(selectedPage = null) {
-                const contentContainer = document.getElementById('tabContent');
-                
-                if (this.requests.length === 0) {
-                    contentContainer.innerHTML = '<div class="no-data">修正依頼がありません</div>';
-                    return;
-                }
-
-                const filteredRequests = selectedPage 
-                    ? this.requests.filter(req => req.page === selectedPage)
-                    : this.requests;
-
-                if (filteredRequests.length === 0) {
-                    contentContainer.innerHTML = '<div class="no-data">このページの修正依頼はありません</div>';
-                    return;
-                }
-
-                const tableHTML = `
-                    <table class="requests-table">
-                        <thead>
-                            <tr>
-                                <th>記入日</th>
-                                <th>修正内容</th>
-                                <th>優先度</th>
-                                <th>カテゴリ</th>
-                                <th>画像</th>
-                                <th>操作</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            ${filteredRequests.map(req => this.renderRequestRow(req)).join('')}
-                        </tbody>
-                    </table>
-                `;
-
-                contentContainer.innerHTML = tableHTML;
-                this.setupTableEventListeners();
-            }
-
-            renderRequestRow(request) {
-                const priorityClass = {
-                    '高': 'priority-high',
-                    '中': 'priority-medium',
-                    '低': 'priority-low'
-                }[request.priority] || '';
-
-                const imageCell = request.imageData 
-                    ? `<img src="${request.imageData}" alt="添付画像" class="image-thumbnail" onclick="window.open('${request.imageData}', '_blank')">`
-                    : '画像なし';
-
-                return `
-                    <tr>
-                        <td>${request.date}</td>
-                        <td>${request.content}</td>
-                        <td class="${priorityClass}">${request.priority}</td>
-                        <td>${request.category}</td>
-                        <td>${imageCell}</td>
-                        <td>
-                            <button class="edit-btn" data-id="${request.id}">編集</button>
-                            <button class="delete-btn" data-id="${request.id}">削除</button>
-                        </td>
-                    </tr>
-                `;
-            }
-
-            setupTableEventListeners() {
-                document.querySelectorAll('.edit-btn').forEach(btn => {
-                    btn.addEventListener('click', (e) => {
-                        this.editRequest(e.target.dataset.id);
-                    });
-                });
-
-                document.querySelectorAll('.delete-btn').forEach(btn => {
-                    btn.addEventListener('click', (e) => {
-                        this.deleteRequest(e.target.dataset.id);
-                    });
-                });
-            }
-
-            // ローカルストレージ操作（フォールバック用）
-            saveToLocalStorage() {
-                localStorage.setItem('修正依頼データ', JSON.stringify(this.requests));
-            }
-
-            loadFromLocalStorage() {
-                const data = localStorage.getItem('修正依頼データ');
-                return data ? JSON.parse(data) : [];
-            }
-        }
-
-        // アプリケーション開始
-        document.addEventListener('DOMContentLoaded', () => {
-            new RequestManager();
-        });
-    </script>
 </body>
 </html>
