@@ -85,7 +85,7 @@
 
     <script>
         // Google Apps Script Web App URL（実際のURLに変更してください）
-        const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbw9sjGXUsrUPnoPaTbZnGCh21-O-Msfi3rjbNRMpMahtm5kJ7j4se87wNY96hzNNcfvdQ/exec';
+        const SCRIPT_URL = 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE';
 
         // データ管理クラス
         class RequestManager {
@@ -205,7 +205,9 @@
                     // コールバック関数を作成
                     window[callbackName] = function (data) {
                         delete window[callbackName];
-                        document.body.removeChild(script);
+                        if (document.body.contains(script)) {
+                            document.body.removeChild(script);
+                        }
                         resolve(data);
                     };
 
@@ -221,7 +223,9 @@
                     script.src = url + '?' + queryString;
                     script.onerror = () => {
                         delete window[callbackName];
-                        document.body.removeChild(script);
+                        if (document.body.contains(script)) {
+                            document.body.removeChild(script);
+                        }
                         reject(new Error('JSONP request failed'));
                     };
 
@@ -231,10 +235,12 @@
                     setTimeout(() => {
                         if (window[callbackName]) {
                             delete window[callbackName];
-                            document.body.removeChild(script);
+                            if (document.body.contains(script)) {
+                                document.body.removeChild(script);
+                            }
                             reject(new Error('JSONP request timeout'));
                         }
-                    }, 10000);
+                    }, 15000); // タイムアウトを15秒に延長
                 });
             }
 
@@ -244,13 +250,19 @@
                         throw new Error('Google Apps Script URLが設定されていません');
                     }
 
+                    console.log('スプレッドシートに保存中...', requestData);
                     const response = await this.jsonpRequest(SCRIPT_URL, {
                         action: 'add',
                         data: JSON.stringify(requestData)
                     });
 
+                    console.log('スプレッドシートからの応答:', response);
+
                     if (response.status === 'success') {
                         console.log('スプレッドシートに保存成功:', response);
+                        // ローカルデータも更新
+                        this.requests.push(requestData);
+                        this.saveToLocalStorage();
                         return response;
                     } else {
                         throw new Error(response.message || 'スプレッドシートへの保存に失敗');
@@ -268,11 +280,14 @@
             async updateRequest(id, requestData) {
                 try {
                     if (SCRIPT_URL !== 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE') {
+                        console.log('スプレッドシートを更新中...', { id, requestData });
                         const response = await this.jsonpRequest(SCRIPT_URL, {
                             action: 'update',
                             id: id,
                             data: JSON.stringify(requestData)
                         });
+
+                        console.log('スプレッドシート更新応答:', response);
 
                         if (response.status !== 'success') {
                             throw new Error(response.message || 'スプレッドシートの更新に失敗');
@@ -302,10 +317,13 @@
                 if (confirm('この修正依頼を削除しますか？')) {
                     try {
                         if (SCRIPT_URL !== 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE') {
+                            console.log('スプレッドシートから削除中...', id);
                             const response = await this.jsonpRequest(SCRIPT_URL, {
                                 action: 'delete',
                                 id: id
                             });
+
+                            console.log('スプレッドシート削除応答:', response);
 
                             if (response.status !== 'success') {
                                 throw new Error(response.message || 'スプレッドシートからの削除に失敗');
@@ -332,19 +350,25 @@
             async loadRequests() {
                 try {
                     // スプレッドシートからデータを読み込み
-                    if (SCRIPT_URL !== 'YOUR_GOOGLE_APPS_SCRIPT_URL_HERE') {
+                    if (SCRIPT_URL !== 'https://script.google.com/macros/s/AKfycbw9sjGXUsrUPnoPaTbZnGCh21-O-Msfi3rjbNRMpMahtm5kJ7j4se87wNY96hzNNcfvdQ/exec') {
                         try {
+                            console.log('スプレッドシートからデータを読み込み中...');
                             const response = await this.jsonpRequest(SCRIPT_URL, { action: 'get' });
+                            console.log('スプレッドシート読み込み応答:', response);
 
                             if (response.status === 'success') {
                                 this.requests = response.data || [];
                                 this.saveToLocalStorage(); // ローカルにもバックアップ
                                 console.log('スプレッドシートからデータを読み込みました:', this.requests.length + '件');
                                 return;
+                            } else {
+                                console.warn('スプレッドシート読み込み失敗:', response.message);
                             }
                         } catch (error) {
                             console.error('スプレッドシート読み込みエラー:', error);
                         }
+                    } else {
+                        console.log('Google Apps Script URLが設定されていません');
                     }
 
                     // フォールバック: ローカルストレージから読み込み
