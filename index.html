@@ -12,7 +12,7 @@
     <div class="container">
         <header>
             <h1>修正依頼管理システム</h1>
-            <p class="version">スプレッドシート版 - 複数人で共有可能</p>
+            <p class="version">スプレッドシート版 - 複数人で共有可能 (Ver.02)</p>
         </header>
 
         <!-- 入力フォーム -->
@@ -64,10 +64,15 @@
 
                 <div class="form-group">
                     <label for="image">画像アップロード:</label>
+                    <small style="color: #e74c3c; margin-bottom: 5px; display: block;">※ 画像は300x300px以下に自動圧縮されます</small>
                     <small id="imageHelp" style="display: none; color: #666; margin-bottom: 5px;">※
                         画像を変更する場合のみ選択してください。選択しない場合は既存の画像が保持されます。</small>
                     <input type="file" id="image" accept="image/*">
+                    <div id="dropZone" class="drop-zone">
+                        <p>ここに画像をドラッグ&ドロップ<br>または<br>Ctrl+V でペースト<br><small>（自動で小さく圧縮されます）</small></p>
+                    </div>
                     <div id="imagePreview"></div>
+                    <button type="button" id="clearImage" class="clear-btn" style="display: none;">画像をクリア</button>
                 </div>
 
                 <button type="submit" class="submit-btn">登録</button>
@@ -85,7 +90,7 @@
 
     <script>
         // Google Apps Script Web App URL
-        const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbw9sjGXUsrUPnoPaTbZnGCh21-O-Msfi3rjbNRMpMahtm5kJ7j4se87wNY96hzNNcfvdQ/exec';
+        const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzOB09iKntDht0H-jphwbiFNL3UHvVZIw2onVqayr0QQJjTD6nZPN9NSyIzfw8Z2H5U/exec';
 
         // データ管理クラス
         class RequestManager {
@@ -118,11 +123,30 @@
                         this.handleImagePreview(e);
                     });
                 }
+
+                // ドラッグ&ドロップ機能
+                this.setupDragAndDrop();
+                
+                // コピー&ペースト機能
+                this.setupPasteFunction();
+                
+                // 画像クリアボタン
+                document.getElementById('clearImage').addEventListener('click', () => {
+                    this.clearImage();
+                });
             }
 
             setCurrentDate() {
-                const today = new Date().toISOString().split('T')[0];
+                const today = this.getCurrentDateString();
                 document.getElementById('date').value = today;
+            }
+
+            getCurrentDateString() {
+                const now = new Date();
+                const year = now.getFullYear();
+                const month = String(now.getMonth() + 1).padStart(2, '0');
+                const day = String(now.getDate()).padStart(2, '0');
+                return `${year}-${month}-${day}`;
             }
 
             async handleSubmit() {
@@ -147,7 +171,16 @@
                     alert('保存が完了しました！');
                 } catch (error) {
                     console.error('保存エラー:', error);
-                    alert('保存に失敗しました。ローカルストレージに保存します。');
+                    
+                    let errorMessage = '保存に失敗しました。';
+                    if (error.message.includes('too large')) {
+                        errorMessage = '画像が大きすぎます。より小さな画像を使用してください。';
+                    } else if (error.message.includes('timeout')) {
+                        errorMessage = 'タイムアウトしました。ネットワーク接続を確認してください。';
+                    }
+                    
+                    alert(errorMessage + '\nローカルストレージに保存します。');
+                    
                     // フォールバック: ローカルストレージに保存
                     const formData = await this.getFormData();
                     this.requests.push(formData);
@@ -184,14 +217,76 @@
                     category: document.getElementById('category').value,
                     imageData: imageData,
                     imageName: imageName,
-                    createdAt: new Date().toISOString()
+                    createdAt: this.getCurrentDateString()
                 };
             }
 
             fileToBase64(file) {
                 return new Promise((resolve, reject) => {
+                    // すべての画像を圧縮（URL制限対応）
+                    console.log(`元画像サイズ: ${Math.round(file.size / 1024)}KB`);
+                    this.compressImage(file).then(resolve).catch(reject);
+                });
+            }
+
+            compressImage(file) {
+                return new Promise((resolve, reject) => {
+                    const canvas = document.createElement('canvas');
+                    const ctx = canvas.getContext('2d');
+                    const img = new Image();
+                    
+                    img.onload = () => {
+                        // 非常に小さなサイズに制限（URL制限対応）
+                        const maxWidth = 300;
+                        const maxHeight = 300;
+                        let { width, height } = img;
+                        
+                        // アスペクト比を保持してリサイズ
+                        if (width > height) {
+                            if (width > maxWidth) {
+                                height = (height * maxWidth) / width;
+                                width = maxWidth;
+                            }
+                        } else {
+                            if (height > maxHeight) {
+                                width = (width * maxHeight) / height;
+                                height = maxHeight;
+                            }
+                        }
+                        
+                        canvas.width = width;
+                        canvas.height = height;
+                        
+                        // 画像を描画
+                        ctx.drawImage(img, 0, 0, width, height);
+                        
+                        // 段階的に品質を下げて圧縮
+                        let quality = 0.3;
+                        let compressedDataUrl;
+                        let attempts = 0;
+                        
+                        do {
+                            compressedDataUrl = canvas.toDataURL('image/jpeg', quality);
+                            console.log(`圧縮試行 ${attempts + 1}: 品質${quality}, サイズ${Math.round(compressedDataUrl.length / 1024)}KB`);
+                            
+                            if (compressedDataUrl.length < 15000) { // 約11KBのBase64データ
+                                break;
+                            }
+                            
+                            quality -= 0.05;
+                            attempts++;
+                        } while (quality > 0.1 && attempts < 5);
+                        
+                        console.log(`画像を圧縮しました: ${file.size} bytes → ${Math.round(compressedDataUrl.length * 0.75)} bytes (品質: ${quality})`);
+                        resolve(compressedDataUrl);
+                    };
+                    
+                    img.onerror = reject;
+                    
                     const reader = new FileReader();
-                    reader.onload = () => resolve(reader.result);
+                    reader.onload = (e) => {
+                        img.src = e.target.result;
+                    };
                     reader.onerror = reject;
                     reader.readAsDataURL(file);
                 });
@@ -214,19 +309,30 @@
                     // パラメータにコールバック名を追加
                     params.callback = callbackName;
 
-                    // URLにパラメータを追加
+                    // URLの長さをチェック
                     const queryString = Object.keys(params)
                         .map(key => encodeURIComponent(key) + '=' + encodeURIComponent(params[key]))
                         .join('&');
+                    
+                    const fullUrl = url + '?' + queryString;
+                    
+                    console.log(`リクエストURL長: ${fullUrl.length} 文字`);
+                    
+                    // URLが長すぎる場合はエラー（より厳しい制限）
+                    if (fullUrl.length > 6000) {
+                        console.error('URL too long:', fullUrl.length, 'characters');
+                        reject(new Error('Request too large - image data exceeds URL limit'));
+                        return;
+                    }
 
                     const script = document.createElement('script');
-                    script.src = url + '?' + queryString;
+                    script.src = fullUrl;
                     script.onerror = () => {
                         delete window[callbackName];
                         if (document.body.contains(script)) {
                             document.body.removeChild(script);
                         }
-                        reject(new Error('JSONP request failed'));
+                        reject(new Error('JSONP request failed - possibly too large'));
                     };
 
                     document.body.appendChild(script);
@@ -240,13 +346,22 @@
                             }
                             reject(new Error('JSONP request timeout'));
                         }
-                    }, 15000); // タイムアウトを15秒に延長
+                    }, 20000); // タイムアウトを20秒に延長
                 });
             }
 
             async addRequest(requestData) {
                 try {
-                    console.log('スプレッドシートに保存中...', requestData);
+                    console.log('スプレッドシートに保存中...', {
+                        ...requestData,
+                        imageData: requestData.imageData ? `[画像データ: ${Math.round(requestData.imageData.length / 1024)}KB]` : null
+                    });
+                    
+                    // 画像データが大きすぎる場合の警告
+                    if (requestData.imageData && requestData.imageData.length > 100000) {
+                        console.warn('大きな画像データを送信中:', Math.round(requestData.imageData.length / 1024), 'KB');
+                    }
+                    
                     const response = await this.jsonpRequest(SCRIPT_URL, {
                         action: 'add',
                         data: JSON.stringify(requestData)
@@ -265,6 +380,29 @@
                     }
                 } catch (error) {
                     console.error('スプレッドシート保存エラー:', error);
+                    
+                    // 画像データが原因の場合は画像なしで再試行
+                    if (error.message.includes('too large') && requestData.imageData) {
+                        console.log('画像データが大きすぎるため、画像なしで再試行します');
+                        try {
+                            const dataWithoutImage = { ...requestData, imageData: null, imageName: null };
+                            const retryResponse = await this.jsonpRequest(SCRIPT_URL, {
+                                action: 'add',
+                                data: JSON.stringify(dataWithoutImage)
+                            });
+                            
+                            if (retryResponse.status === 'success') {
+                                console.log('画像なしでの保存に成功しました');
+                                this.requests.push(dataWithoutImage);
+                                this.saveToLocalStorage();
+                                alert('画像が大きすぎるため、テキストデータのみ保存されました。');
+                                return retryResponse;
+                            }
+                        } catch (retryError) {
+                            console.error('画像なしでの再試行も失敗:', retryError);
+                        }
+                    }
+                    
                     // フォールバック: ローカルストレージに保存
                     this.requests.push(requestData);
                     this.saveToLocalStorage();
@@ -290,17 +428,17 @@
                     console.log('スプレッドシート更新成功:', response);
 
                     // ローカルデータも更新
-                    const index = this.requests.findIndex(req => req.id === id);
+                    const index = this.requests.findIndex(req => req.id.toString() === id.toString());
                     if (index !== -1) {
-                        this.requests[index] = { ...this.requests[index], ...requestData };
+                        this.requests[index] = { ...requestData };
                         this.saveToLocalStorage();
                     }
                 } catch (error) {
                     console.error('Update request error:', error);
                     // フォールバック: ローカルのみ更新
-                    const index = this.requests.findIndex(req => req.id === id);
+                    const index = this.requests.findIndex(req => req.id.toString() === id.toString());
                     if (index !== -1) {
-                        this.requests[index] = { ...this.requests[index], ...requestData };
+                        this.requests[index] = { ...requestData };
                         this.saveToLocalStorage();
                     }
                     throw error;
@@ -349,6 +487,23 @@
 
                         if (response.status === 'success') {
                             this.requests = response.data || [];
+                            // 日付フォーマットを修正
+                            this.requests = this.requests.map(req => {
+                                if (req.date) {
+                                    // ISO形式の場合は日付部分のみ抽出
+                                    if (req.date.includes('T')) {
+                                        req.date = req.date.split('T')[0];
+                                    }
+                                    // MM/DD/YYYY形式をYYYY-MM-DD形式に変換
+                                    else if (req.date.includes('/')) {
+                                        const dateParts = req.date.split('/');
+                                        if (dateParts.length === 3) {
+                                            req.date = `${dateParts[2]}-${dateParts[0].padStart(2, '0')}-${dateParts[1].padStart(2, '0')}`;
+                                        }
+                                    }
+                                }
+                                return req;
+                            });
                             this.saveToLocalStorage(); // ローカルにもバックアップ
                             console.log('スプレッドシートからデータを読み込みました:', this.requests.length + '件');
                             return;
@@ -369,27 +524,56 @@
             }
 
             editRequest(id) {
-                const request = this.requests.find(req => req.id === id);
+                const request = this.requests.find(req => req.id.toString() === id.toString());
                 if (request) {
-                    this.currentEditId = id;
+                    this.currentEditId = id.toString();
                     this.fillForm(request);
                     document.querySelector('.form-section h2').textContent = '修正依頼を編集';
                     document.querySelector('.submit-btn').textContent = '更新';
+                    
+                    // フォームの先頭にスクロール
+                    document.querySelector('.form-section').scrollIntoView({ 
+                        behavior: 'smooth' 
+                    });
+                } else {
+                    console.error('編集対象のリクエストが見つかりません:', id);
                 }
             }
 
             fillForm(request) {
-                document.getElementById('page').value = request.page;
-                document.getElementById('date').value = request.date;
-                document.getElementById('content').value = request.content;
-                document.getElementById('priority').value = request.priority;
-                document.getElementById('category').value = request.category;
+                document.getElementById('page').value = request.page || '';
+                document.getElementById('date').value = request.date || '';
+                document.getElementById('content').value = request.content || '';
+                document.getElementById('priority').value = request.priority || '';
+                document.getElementById('category').value = request.category || '';
 
                 document.getElementById('imageHelp').style.display = 'block';
+                const dropZone = document.getElementById('dropZone');
+                const clearBtn = document.getElementById('clearImage');
 
+                // 画像表示の改善（Google Drive対応）
                 if (request.imageData) {
+                    // 従来のBase64データ
                     const preview = document.getElementById('imagePreview');
-                    preview.innerHTML = `<img src="${request.imageData}" alt="現在の画像"><p style="margin-top: 5px; color: #666; font-size: 0.9em;">現在の画像</p>`;
+                    preview.innerHTML = `<img src="${request.imageData}" alt="現在の画像"><p style="margin-top: 5px; color: #666; font-size: 0.9em;">現在の画像: ${request.imageName || '画像ファイル'}</p>`;
+                    dropZone.style.display = 'none';
+                    clearBtn.style.display = 'inline-block';
+                } else if (request.thumbnailUrl && request.imageUrl) {
+                    // Google Drive画像
+                    const preview = document.getElementById('imagePreview');
+                    preview.innerHTML = `<img src="${request.thumbnailUrl}" alt="現在の画像"><p style="margin-top: 5px; color: #666; font-size: 0.9em;">現在の画像: ${request.imageName || '画像ファイル'} <a href="${request.imageUrl}" target="_blank">(Google Driveで開く)</a></p>`;
+                    dropZone.style.display = 'none';
+                    clearBtn.style.display = 'inline-block';
+                } else if (request.imageUrl) {
+                    // Google DriveのURL（サムネイルなし）
+                    const preview = document.getElementById('imagePreview');
+                    preview.innerHTML = `<p style="margin-top: 5px; color: #666; font-size: 0.9em;">📷 <a href="${request.imageUrl}" target="_blank">Google Driveの画像を見る</a></p>`;
+                    dropZone.style.display = 'none';
+                    clearBtn.style.display = 'inline-block';
+                } else {
+                    document.getElementById('imagePreview').innerHTML = '';
+                    dropZone.style.display = 'block';
+                    clearBtn.style.display = 'none';
                 }
             }
 
@@ -397,6 +581,7 @@
                 document.getElementById('requestForm').reset();
                 document.getElementById('imagePreview').innerHTML = '';
                 document.getElementById('imageHelp').style.display = 'none';
+                document.getElementById('dropZone').style.display = 'block';
                 this.setCurrentDate();
                 this.currentEditId = null;
                 document.querySelector('.form-section h2').textContent = '新規修正依頼';
@@ -405,17 +590,92 @@
 
             handleImagePreview(event) {
                 const file = event.target.files[0];
+                this.displayImagePreview(file);
+            }
+
+            displayImagePreview(file) {
                 const preview = document.getElementById('imagePreview');
+                const dropZone = document.getElementById('dropZone');
+                const clearBtn = document.getElementById('clearImage');
 
                 if (file) {
                     const reader = new FileReader();
                     reader.onload = (e) => {
-                        preview.innerHTML = `<img src="${e.target.result}" alt="プレビュー">`;
+                        preview.innerHTML = `<img src="${e.target.result}" alt="プレビュー"><p style="margin-top: 5px; color: #666; font-size: 0.9em;">選択された画像: ${file.name} (${Math.round(file.size / 1024)}KB)</p>`;
+                        dropZone.style.display = 'none';
+                        clearBtn.style.display = 'inline-block';
                     };
                     reader.readAsDataURL(file);
                 } else {
                     preview.innerHTML = '';
+                    dropZone.style.display = 'block';
+                    clearBtn.style.display = 'none';
                 }
+            }
+
+            clearImage() {
+                document.getElementById('image').value = '';
+                document.getElementById('imagePreview').innerHTML = '';
+                document.getElementById('dropZone').style.display = 'block';
+                document.getElementById('clearImage').style.display = 'none';
+            }
+
+            setupDragAndDrop() {
+                const dropZone = document.getElementById('dropZone');
+                
+                ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+                    dropZone.addEventListener(eventName, this.preventDefaults, false);
+                });
+
+                ['dragenter', 'dragover'].forEach(eventName => {
+                    dropZone.addEventListener(eventName, () => {
+                        dropZone.classList.add('drag-over');
+                    }, false);
+                });
+
+                ['dragleave', 'drop'].forEach(eventName => {
+                    dropZone.addEventListener(eventName, () => {
+                        dropZone.classList.remove('drag-over');
+                    }, false);
+                });
+
+                dropZone.addEventListener('drop', (e) => {
+                    const files = e.dataTransfer.files;
+                    if (files.length > 0) {
+                        const file = files[0];
+                        if (file.type.startsWith('image/')) {
+                            this.displayImagePreview(file);
+                            // ファイル入力にも設定
+                            const imageInput = document.getElementById('image');
+                            const dataTransfer = new DataTransfer();
+                            dataTransfer.items.add(file);
+                            imageInput.files = dataTransfer.files;
+                        }
+                    }
+                }, false);
+            }
+
+            setupPasteFunction() {
+                document.addEventListener('paste', (e) => {
+                    const items = e.clipboardData.items;
+                    for (let i = 0; i < items.length; i++) {
+                        if (items[i].type.indexOf('image') !== -1) {
+                            const file = items[i].getAsFile();
+                            this.displayImagePreview(file);
+                            // ファイル入力にも設定
+                            const imageInput = document.getElementById('image');
+                            const dataTransfer = new DataTransfer();
+                            dataTransfer.items.add(file);
+                            imageInput.files = dataTransfer.files;
+                            break;
+                        }
+                    }
+                });
+            }
+
+            preventDefaults(e) {
+                e.preventDefault();
+                e.stopPropagation();
             }
 
             renderTabs() {
@@ -491,16 +751,38 @@
                     '低': 'priority-low'
                 }[request.priority] || '';
 
-                const imageCell = request.imageData
-                    ? `<img src="${request.imageData}" alt="添付画像" class="image-thumbnail" onclick="window.open('${request.imageData}', '_blank')">`
-                    : '画像なし';
+                // 画像表示の改善（Google Drive対応）
+                let imageCell = '画像なし';
+                if (request.imageData) {
+                    // 従来のBase64データ
+                    imageCell = `<img src="${request.imageData}" alt="添付画像" class="image-thumbnail" onclick="window.open('${request.imageData}', '_blank')">`;
+                } else if (request.thumbnailUrl && request.imageUrl) {
+                    // Google Drive画像
+                    imageCell = `<img src="${request.thumbnailUrl}" alt="添付画像" class="image-thumbnail" onclick="window.open('${request.imageUrl}', '_blank')" title="クリックでGoogle Driveで開く">`;
+                } else if (request.imageUrl) {
+                    // Google DriveのURL（サムネイルなし）
+                    imageCell = `<a href="${request.imageUrl}" target="_blank" class="drive-link">📷 画像を見る</a>`;
+                }
+
+                // 日付を正しい形式で表示
+                let displayDate = request.date || '';
+                if (displayDate) {
+                    // YYYY-MM-DD形式をYYYY/MM/DD形式に変換
+                    if (displayDate.includes('-')) {
+                        displayDate = displayDate.replace(/-/g, '/');
+                    }
+                    // ISO形式の場合は日付部分のみ抽出
+                    if (displayDate.includes('T')) {
+                        displayDate = displayDate.split('T')[0].replace(/-/g, '/');
+                    }
+                }
 
                 return `
                     <tr>
-                        <td>${request.date}</td>
-                        <td>${request.content}</td>
-                        <td class="${priorityClass}">${request.priority}</td>
-                        <td>${request.category}</td>
+                        <td>${displayDate}</td>
+                        <td>${request.content || ''}</td>
+                        <td class="${priorityClass}">${request.priority || ''}</td>
+                        <td>${request.category || ''}</td>
                         <td>${imageCell}</td>
                         <td>
                             <button class="edit-btn" data-id="${request.id}">編集</button>
